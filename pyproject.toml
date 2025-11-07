@@ -21,15 +21,6 @@ dev = [
     "matplotlib>=3.7.0",
     "ipykernel>=6.0.0",
 ]
-scribe = [
-    "scribe @ git+https://github.com/goodfire-ai/scribe.git",
-]
-all = [
-    "jupyter>=1.0.0",
-    "matplotlib>=3.7.0",
-    "ipykernel>=6.0.0",
-    "scribe @ git+https://github.com/goodfire-ai/scribe.git",
-]
 
 [build-system]
 requires = ["hatchling"]

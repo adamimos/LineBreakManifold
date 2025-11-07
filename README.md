@@ -191,23 +191,21 @@ uv pip install -e .
 
 # With dev tools (Jupyter, matplotlib)
 uv pip install -e ".[dev]"
-
-# With Scribe (interactive exploration)
-uv pip install -e ".[scribe]"
-
-# Everything
-uv pip install -e ".[all]"
 ```
 
 ---
 
 ## 💡 Interactive Exploration (Optional)
 
-Install [Scribe](https://github.com/goodfire-ai/scribe) for AI-assisted Jupyter notebooks:
+Install [Scribe](https://github.com/goodfire-ai/scribe) separately for AI-assisted Jupyter notebooks:
 
 ```bash
-uv pip install -e ".[scribe]"
-scribe  # Launch interactive session
+# Clone and install Scribe
+git clone https://github.com/goodfire-ai/scribe.git
+uv pip install -e ./scribe
+
+# Launch interactive session
+scribe
 ```
 
 Then ask: *"Load a batch from width 40 and show me the metadata structure"*
