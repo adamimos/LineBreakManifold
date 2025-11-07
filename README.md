@@ -16,9 +16,9 @@ uv pip install -e .
 uv run python explore_dataset.py
 
 # 3. Use it
-python -c "from linebreak_utils import load_linebreak_batch; \
-           batch = load_linebreak_batch('linebreak_data', [40], 8); \
-           print(f'Loaded: {batch[\"tokens\"].shape}')"
+uv run python -c "from linebreak_utils import load_linebreak_batch; \
+                  batch = load_linebreak_batch('linebreak_data', [40], 8); \
+                  print(f'Loaded: {batch[\"tokens\"].shape}')"
 ```
 
 **Output**: `linebreak_data/` with ~3.5GB of tokenized text at 28 different widths (15→150).
