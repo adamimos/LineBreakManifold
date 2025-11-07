@@ -12,10 +12,15 @@ Creates synthetic datasets where text is wrapped at different character widths t
 # 1. Install
 uv pip install -e .
 
-# 2. Generate dataset (~10-15 min first time)
+# 2. Authenticate with HuggingFace (required for Gemma-2-2b)
+huggingface-cli login
+# Get your token from: https://huggingface.co/settings/tokens
+# Accept license at: https://huggingface.co/google/gemma-2-2b
+
+# 3. Generate dataset (~10-15 min first time)
 uv run python explore_dataset.py
 
-# 3. Use it
+# 4. Use it
 uv run python -c "from linebreak_utils import load_linebreak_batch; \
                   batch = load_linebreak_batch('linebreak_data', [40], 8); \
                   print(f'Loaded: {batch[\"tokens\"].shape}')"
@@ -215,6 +220,15 @@ All code and outputs auto-save to `notebooks/`.
 ---
 
 ## 🐛 Troubleshooting
+
+### "401 Client Error: Unauthorized" / "Gated repo"
+Gemma-2-2b requires HuggingFace authentication:
+```bash
+# 1. Accept license: https://huggingface.co/google/gemma-2-2b
+# 2. Get token: https://huggingface.co/settings/tokens
+# 3. Login:
+huggingface-cli login
+```
 
 ### "No module named 'transformer_lens'"
 ```bash

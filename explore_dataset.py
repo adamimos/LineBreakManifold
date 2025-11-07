@@ -21,6 +21,10 @@ from linebreak_utils import (
     save_tokenized_dataset,
     save_tokenized_dataset_torch
 )
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, MofNCompleteColumn
+from rich.console import Console
+
+console = Console()
 
 # Parameters for dataset creation
 BOOK_IDS = [

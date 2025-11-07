@@ -13,6 +13,7 @@ dependencies = [
     "transformers>=4.30.0",
     "accelerate>=0.20.0",
     "transformer-lens>=1.0.0",
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]
