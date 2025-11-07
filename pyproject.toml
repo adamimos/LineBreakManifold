@@ -1,0 +1,48 @@
+[project]
+name = "linebreak-manifold"
+version = "0.1.0"
+description = "Dataset curation pipeline for the linebreaking task from 'When Models Manipulate Manifolds' (Anthropic)"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+dependencies = [
+    "requests>=2.28.0",
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+    "accelerate>=0.20.0",
+    "transformer-lens>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.0.0",
+    "matplotlib>=3.7.0",
+    "ipykernel>=6.0.0",
+]
+scribe = [
+    "scribe @ git+https://github.com/goodfire-ai/scribe.git",
+]
+all = [
+    "jupyter>=1.0.0",
+    "matplotlib>=3.7.0",
+    "ipykernel>=6.0.0",
+    "scribe @ git+https://github.com/goodfire-ai/scribe.git",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+only-include = ["linebreak_utils.py", "explore_dataset.py"]
+
+[tool.uv]
+dev-dependencies = [
+    "jupyter>=1.0.0",
+    "matplotlib>=3.7.0",
+    "ipykernel>=6.0.0",
+]
+

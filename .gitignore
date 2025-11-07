@@ -1,0 +1,42 @@
+# Dataset files (generated, not version controlled)
+linebreak_data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter
+.ipynb_checkpoints
+notebooks/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.egg-info/
+dist/
+build/
+
+# Lock files (optional - uncomment to ignore)
+# uv.lock
+
+# Python version file (optional - uncomment to ignore)
+# .python-version
+
