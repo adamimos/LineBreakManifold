@@ -32,10 +32,8 @@ print("\n" + "="*60)
 print("DECODING TOKENS BACK TO TEXT")
 print("="*60)
 
-from transformer_lens import HookedTransformer
-
-model = HookedTransformer.from_pretrained("gpt2")
-tokenizer = model.tokenizer
+from linebreak_utils import get_gemma_tokenizer
+tokenizer = get_gemma_tokenizer()
 
 # Decode first sequence
 decoded_text = tokenizer.decode(tokens_40[0])
@@ -64,4 +62,3 @@ print(f"Width 150:\n{tokenizer.decode(tokens_150[0][:50])}\n")
 print("="*60)
 print("✓ All examples completed!")
 print("="*60)
-

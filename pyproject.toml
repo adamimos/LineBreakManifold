@@ -14,6 +14,9 @@ dependencies = [
     "accelerate>=0.20.0",
     "transformer-lens>=1.0.0",
     "rich>=13.0.0",
+    "scikit-learn>=1.7.2",
+    "plotly>=6.4.0",
+    "nnsight>=0.5.10",
 ]
 
 [project.optional-dependencies]
@@ -37,4 +40,3 @@ dev-dependencies = [
     "matplotlib>=3.7.0",
     "ipykernel>=6.0.0",
 ]
-

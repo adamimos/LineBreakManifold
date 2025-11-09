@@ -13,13 +13,7 @@ from linebreak_utils import (
     download_gutenberg_book,
     clean_gutenberg_text,
     wrap_text_to_width,
-    create_linebreak_dataset,
-    save_dataset,
-    get_gemma_tokenizer,
-    tokenize_dataset,
-    create_metadata_dataset,
-    save_tokenized_dataset,
-    save_tokenized_dataset_torch
+    get_gemma_tokenizer
 )
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, MofNCompleteColumn
 from rich.console import Console
@@ -50,10 +44,8 @@ NUM_SEQUENCES = 200
 # You can truncate to fit your model's context window during training
 MIN_SEQ_LENGTH = 500
 
-# Gemma-2-2b settings
-DEVICE = "mps"  # Use "cuda" for NVIDIA GPUs, "cpu" for CPU
-DTYPE = "float16"  # "float16" for faster/less memory, "float32" for precision
-MAX_TOKENS = 8192  # Gemma-2-2b context window
+# Gemma-2-27b settings
+MAX_TOKENS = 8192  # Gemma-2 context window
 
 # Output directory
 OUTPUT_DIR = "linebreak_data"
@@ -123,12 +115,20 @@ with Progress(
     # Create wrapped versions at each width
     task2 = progress.add_task("[cyan]Creating wrapped sequences...", total=len(LINE_WIDTHS))
     dataset = {}
+    from linebreak_utils import validate_wrapped_text, paragraph_has_word_exceeding_width
+
     for width in LINE_WIDTHS:
         sequences = []
-        for i in range(min(NUM_SEQUENCES, len(all_paragraphs))):
-            para = all_paragraphs[i % len(all_paragraphs)]
+        # Iterate deterministically through paragraphs and pick those safe for this width
+        for para in all_paragraphs:
+            if paragraph_has_word_exceeding_width(para, width):
+                continue  # skip paragraphs that would force an overlong line
             wrapped = wrap_text_to_width(para, width)
+            # Validate aggressively as a safety net
+            assert validate_wrapped_text(wrapped, width), f"Found line >{width} for width {width}"
             sequences.append(wrapped)
+            if len(sequences) >= NUM_SEQUENCES:
+                break
         dataset[width] = sequences
         progress.update(task2, advance=1)
 
@@ -189,12 +189,12 @@ with Progress(
 
 console.print(f"[green]✓[/green] Saved {len(dataset)} text files")
 
-# %% Cell 7: Tokenize with Gemma-2-2b
+# %% Cell 7: Tokenize with Gemma-2-27b
 
-console.print("\n[bold cyan]═══ TOKENIZING WITH GEMMA-2-2B ═══[/bold cyan]\n")
+console.print("\n[bold cyan]═══ TOKENIZING WITH GEMMA-2-27B ═══[/bold cyan]\n")
 
-console.print("[yellow]Loading Gemma-2-2b tokenizer...[/yellow]")
-tokenizer = get_gemma_tokenizer(device=DEVICE, dtype=DTYPE)
+console.print("[yellow]Loading Gemma-2 tokenizer...[/yellow]")
+tokenizer = get_gemma_tokenizer()
 console.print("[green]✓[/green] Tokenizer loaded")
 
 with Progress(
@@ -229,9 +229,86 @@ if sample_width in tokenized_dataset:
     decoded = tokenizer.decode(sample_tokens)
     console.print(f"  Decoded: {decoded[:150]}...")
 
-# %% Cell 8: Generate metadata
+# %% Cell 8: Compute line features (char_count, contains_newline)
 
-console.print("\n[bold cyan]═══ GENERATING TOKEN METADATA ═══[/bold cyan]\n")
+console.print("\n[bold cyan]═══ COMPUTING LINE FEATURES ═══[/bold cyan]\n")
+
+def compute_line_features_per_token(text, token_ids, tokenizer, max_length=None):
+    """Compute per-token features using offsets into the wrapped text when possible.
+    - char_count: characters since the most recent newline after consuming the token
+    - contains_newline: 1 if the token's span contains '\\n', else 0
+    Falls back to per-token decode if offsets are unavailable; in fallback mode,
+    ignores leading spaces immediately after a newline to avoid overcounting.
+    """
+    # Try robust offsets-based path
+    try:
+        enc = tokenizer(
+            text,
+            return_offsets_mapping=True,
+            add_special_tokens=True,
+            max_length=(max_length if max_length else len(token_ids)),
+            truncation=True,
+        )
+        # Handle batch vs single outputs
+        input_ids = enc["input_ids"][0] if isinstance(enc["input_ids"][0], list) else enc["input_ids"]
+        offsets = enc["offset_mapping"][0] if isinstance(enc["offset_mapping"][0], list) else enc["offset_mapping"]
+
+        if len(input_ids) != len(token_ids):
+            raise ValueError("Tokenizer mismatch with provided token_ids")
+
+        # Precompute last newline index at each position
+        n = len(text)
+        last_nl = [-1] * (n + 1)
+        last = -1
+        for i, ch in enumerate(text):
+            if ch == "\n":
+                last = i
+            last_nl[i + 1] = last
+
+        char_counts = []
+        contains_newlines = []
+        for (start, end) in offsets:
+            # Some special tokens can have (0,0); keep last count if exists
+            if start == end == 0 and char_counts:
+                char_counts.append(char_counts[-1])
+                contains_newlines.append(0)
+                continue
+
+            span = text[start:end]
+            contains_newlines.append(1 if "\n" in span else 0)
+
+            # Distance from last newline before end to end
+            ln_idx = last_nl[end]
+            count = end - (ln_idx + 1)
+            if count < 0:
+                count = 0
+            char_counts.append(count)
+
+        return char_counts, contains_newlines
+
+    except Exception:
+        # Fallback: per-token decode, ignore leading spaces at line start
+        char_counts = []
+        contains_newlines = []
+        line_count = 0
+        at_line_start = True
+
+        for tok in token_ids:
+            piece = tokenizer.decode([tok]).replace("\r\n", "\n").replace("\r", "\n")
+            contains_newlines.append(1 if "\n" in piece else 0)
+            for ch in piece:
+                if ch == "\n":
+                    line_count = 0
+                    at_line_start = True
+                else:
+                    if at_line_start and ch == " ":
+                        # ignore synthetic leading spaces at line start
+                        continue
+                    at_line_start = False
+                    line_count += 1
+            char_counts.append(line_count)
+
+        return char_counts, contains_newlines
 
 with Progress(
     SpinnerColumn(),
@@ -240,41 +317,40 @@ with Progress(
     TimeElapsedColumn(),
     console=console
 ) as progress:
-    task = progress.add_task("[cyan]Generating metadata...", total=len(LINE_WIDTHS))
+    task = progress.add_task("[cyan]Computing line features...", total=len(LINE_WIDTHS))
     
-    from linebreak_utils import generate_token_metadata
-    metadata_dataset = {}
+    char_count_dataset = {}
+    contains_newline_dataset = {}
     
     for width in LINE_WIDTHS:
-        sequences = dataset[width]
+        texts = dataset[width]
         tokenized_sequences = tokenized_dataset[width]
-        metadata_sequences = []
+        char_count_sequences = []
+        contains_newline_sequences = []
         
-        for text, tokens in zip(sequences, tokenized_sequences):
-            metadata = generate_token_metadata(text, tokens, tokenizer, width)
-            metadata_sequences.append(metadata)
+        for text, tokens in zip(texts, tokenized_sequences):
+            counts, flags = compute_line_features_per_token(text, tokens, tokenizer, max_length=MAX_TOKENS)
+            char_count_sequences.append(counts)
+            contains_newline_sequences.append(flags)
         
-        metadata_dataset[width] = metadata_sequences
+        char_count_dataset[width] = char_count_sequences
+        contains_newline_dataset[width] = contains_newline_sequences
         progress.update(task, advance=1)
 
-console.print(f"[green]✓[/green] Generated metadata for {len(metadata_dataset)} widths")
+console.print(f"[green]✓[/green] Computed line features for {len(char_count_dataset)} widths")
 
-# Show sample metadata
+# Show sample features
 sample_width = 40
-if sample_width in metadata_dataset:
-    sample_meta = metadata_dataset[sample_width][0][:5]
-    console.print(f"\n[yellow]Sample metadata (width {sample_width}, first 5 tokens):[/yellow]")
-    for i, meta in enumerate(sample_meta):
-        decoded_token = tokenizer.decode([tokenized_dataset[sample_width][0][i]])
-        console.print(f"  Token {i}: '{decoded_token}'")
-        console.print(f"    char_pos={meta['char_position']}, line_width={meta['line_width']}, "
-                     f"chars_remaining={meta['chars_remaining']}")
-        console.print(f"    token_len={meta['token_length']}, next_token_len={meta['next_token_length']}, "
-                     f"line={meta['line_number']}, is_newline={meta['is_newline']}")
+if sample_width in char_count_dataset:
+    sample_counts = char_count_dataset[sample_width][0][:10]
+    sample_flags = contains_newline_dataset[sample_width][0][:10]
+    console.print(f"\n[yellow]Sample features (width {sample_width}, first 10 tokens):[/yellow]")
+    console.print(f"  char_count: {sample_counts}")
+    console.print(f"  contains_newline: {sample_flags}")
 
-# %% Cell 9: Save tokenized data and metadata
+# %% Cell 9: Save tokenized data and line features
 
-console.print("\n[bold cyan]═══ SAVING TOKENIZED DATA & METADATA ═══[/bold cyan]\n")
+console.print("\n[bold cyan]═══ SAVING TOKENIZED DATA & LINE FEATURES ═══[/bold cyan]\n")
 
 with Progress(
     SpinnerColumn(),
@@ -285,7 +361,7 @@ with Progress(
 ) as progress:
     
     # Save JSON and PyTorch tensors
-    task = progress.add_task("[cyan]Saving tokens & metadata...", total=len(LINE_WIDTHS))
+    task = progress.add_task("[cyan]Saving tokens & line features...", total=len(LINE_WIDTHS))
     
     import torch
     import json
@@ -302,21 +378,19 @@ with Progress(
         tokens_tensor = torch.tensor(padded, dtype=torch.long)
         pt_file = os.path.join(OUTPUT_DIR, f"linebreak_width_{width}_tokens.pt")
         torch.save(tokens_tensor, pt_file)
-        
-        # PyTorch metadata
-        if metadata_dataset:
-            metadata_tensor = []
-            for seq_meta in metadata_dataset[width]:
-                seq_tensor = [[m['char_position'], m['line_width'], m['chars_remaining'],
-                              m['token_length'], m['next_token_length'], m['line_number'],
-                              m['is_newline']] for m in seq_meta]
-                # Pad to max_len
-                while len(seq_tensor) < max_len:
-                    seq_tensor.append([0, 0, 0, 0, 0, 0, 0])
-                metadata_tensor.append(seq_tensor)
-            metadata_tensor = torch.tensor(metadata_tensor, dtype=torch.long)
-            meta_file = os.path.join(OUTPUT_DIR, f"linebreak_width_{width}_metadata.pt")
-            torch.save(metadata_tensor, meta_file)
+
+        # PyTorch line features
+        # char_count
+        char_padded = [seq + [0] * (max_len - len(seq)) for seq in char_count_dataset[width]]
+        char_tensor = torch.tensor(char_padded, dtype=torch.long)
+        char_file = os.path.join(OUTPUT_DIR, f"linebreak_width_{width}_char_count.pt")
+        torch.save(char_tensor, char_file)
+
+        # contains_newline
+        contains_padded = [seq + [0] * (max_len - len(seq)) for seq in contains_newline_dataset[width]]
+        contains_tensor = torch.tensor(contains_padded, dtype=torch.long)
+        contains_file = os.path.join(OUTPUT_DIR, f"linebreak_width_{width}_contains_newline.pt")
+        torch.save(contains_tensor, contains_file)
         
         progress.update(task, advance=1)
 
@@ -326,8 +400,6 @@ console.print(f"\n[bold]Files created:[/bold]")
 console.print(f"  • linebreak_width_*.txt (raw text)")
 console.print(f"  • linebreak_width_*_tokens.json (token IDs as JSON)")
 console.print(f"  • linebreak_width_*_tokens.pt (token tensors)")
-console.print(f"  • linebreak_width_*_metadata.pt (metadata tensors)")
-console.print(f"\n[bold]Metadata features per token:[/bold]")
-console.print(f"  [char_position, line_width, chars_remaining, token_length,")
-console.print(f"   next_token_length, line_number, is_newline]")
-console.print(f"\n[green]Ready for training![/green] 🚀")
+console.print(f"  • linebreak_width_*_char_count.pt (chars since last newline per token)")
+console.print(f"  • linebreak_width_*_contains_newline.pt (1 if token contains '\\n')")
+console.print(f"\n[green]Ready for analysis![/green] 🚀")

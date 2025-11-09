@@ -12,10 +12,10 @@ Creates synthetic datasets where text is wrapped at different character widths t
 # 1. Install
 uv pip install -e .
 
-# 2. Authenticate with HuggingFace (required for Gemma-2-2b)
+# 2. Authenticate with HuggingFace (required for Gemma-2-27b)
 huggingface-cli login
 # Get your token from: https://huggingface.co/settings/tokens
-# Accept license at: https://huggingface.co/google/gemma-2-2b
+# Accept license at: https://huggingface.co/google/gemma-2-27b
 
 # 3. Generate dataset (~10-15 min first time)
 uv run python explore_dataset.py
@@ -37,7 +37,7 @@ Recreates the paper's synthetic linebreaking dataset:
 1. **Downloads** 10 classic books from Project Gutenberg
 2. **Cleans** text (removes headers/footers, normalizes whitespace)
 3. **Wraps** text at fixed widths (15, 20, 25, ..., 150 characters)
-4. **Tokenizes** with Gemma-2-2b (8192 token context)
+4. **Tokenizes** with Gemma-2-27b (8192 token context)
 5. **Generates metadata** for each token:
    - `char_position`: Position in current line (0 to line_width)
    - `line_width`: The constraint k
@@ -107,7 +107,7 @@ dataset = create_linebreak_dataset(
     min_seq_length=1000            # Longer sequences
 )
 
-# Tokenize
+# Tokenize (Gemma-2-27b)
 tokenizer = get_gemma_tokenizer()
 tokenized = tokenize_dataset(dataset, tokenizer)
 metadata = create_metadata_dataset(dataset, tokenized, tokenizer)
@@ -123,7 +123,7 @@ save_tokenized_dataset_torch(tokenized, "custom_data", metadata)
 - **Books**: 10 classics (Pride & Prejudice, Alice in Wonderland, Sherlock Holmes, etc.)
 - **Sequences**: ~200 per width (min 500 chars each)
 - **Widths**: 28 different widths (15, 20, 25, ..., 150)
-- **Tokenizer**: Gemma-2-2b (8192 token context, MPS/CUDA/CPU)
+- **Tokenizer**: Gemma-2-27b (8192 token context, CUDA recommended)
 - **Total Size**: ~3.5GB (text + tokens + metadata)
 
 ### File Formats
@@ -153,7 +153,7 @@ clean_gutenberg_text(text: str) -> str
 wrap_text_to_width(text: str, width: int) -> str
 
 # Tokenization
-get_gemma_tokenizer(device="mps", dtype="float16")
+get_gemma_tokenizer()
 tokenize_dataset(dataset, tokenizer, max_length=8192)
 create_metadata_dataset(dataset, tokenized_dataset, tokenizer)
 
@@ -222,9 +222,9 @@ All code and outputs auto-save to `notebooks/`.
 ## 🐛 Troubleshooting
 
 ### "401 Client Error: Unauthorized" / "Gated repo"
-Gemma-2-2b requires HuggingFace authentication:
+Gemma-2-27b requires HuggingFace authentication:
 ```bash
-# 1. Accept license: https://huggingface.co/google/gemma-2-2b
+# 1. Accept license: https://huggingface.co/google/gemma-2-27b
 # 2. Get token: https://huggingface.co/settings/tokens
 # 3. Login:
 huggingface-cli login
@@ -242,7 +242,7 @@ batch = load_linebreak_batch(..., batch_size=8, max_length=1024)
 ```
 
 ### Slow first run
-First run downloads Gemma-2-2b model (~5GB). This is cached.
+First run downloads Gemma-2-27b model (tens of GB). This is cached.
 
 ### Dataset too large
 Generate only the widths you need:

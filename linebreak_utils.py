@@ -14,6 +14,21 @@ from typing import List, Dict, Optional
 from pathlib import Path
 from transformer_lens import HookedTransformer
 
+def get_gpt2_tokenizer(use_fast: bool = True):
+    """
+    Get the GPT-2 tokenizer via HuggingFace Transformers.
+
+    Args:
+        use_fast: Whether to use the fast tokenizer implementation (recommended).
+
+    Returns:
+        A GPT-2 tokenizer compatible with encode/decode and offset mappings.
+    """
+    from transformers import AutoTokenizer
+    # GPT-2 has no special tokens by default; fast tokenizer provides offsets
+    tokenizer = AutoTokenizer.from_pretrained("gpt2", use_fast=use_fast)
+    return tokenizer
+
 
 def download_gutenberg_book(book_id: int) -> str:
     """
@@ -197,6 +212,118 @@ def wrap_text_to_width(text: str, width: int) -> str:
     return '\n\n'.join(wrapped_paragraphs)
 
 
+def wrap_text_to_width_strict(text: str, width: int) -> str:
+    """
+    Strictly wrap text to a fixed character width, ensuring no line exceeds `width`.
+
+    - Preserves word-boundary wrapping when possible (like the paper),
+      but if a single word is longer than `width`, it is split across lines
+      so that every output line has length <= width.
+    - Removes existing intra-paragraph newlines and normalizes spaces.
+
+    Args:
+        text: Input text (paragraphs separated by double newlines)
+        width: Maximum line width in characters (hard constraint)
+
+    Returns:
+        Text wrapped to the specified width, with no line longer than `width`.
+    """
+    assert width > 0, "width must be positive"
+
+    paragraphs = text.split('\n\n')
+    wrapped_paragraphs = []
+
+    for para in paragraphs:
+        # Normalize: remove existing linebreaks inside paragraph, collapse spaces
+        para = para.replace('\n', ' ')
+        para = re.sub(r' +', ' ', para).strip()
+        if not para:
+            continue
+
+        words = para.split(' ')
+        current_line = ''
+        wrapped_lines = []
+
+        for word in words:
+            if not current_line:
+                # Place the word, splitting if necessary
+                if len(word) <= width:
+                    current_line = word
+                else:
+                    # Split long word into width-sized chunks
+                    start = 0
+                    while start < len(word):
+                        end = min(start + width, len(word))
+                        chunk = word[start:end]
+                        if end < len(word):
+                            wrapped_lines.append(chunk)
+                        else:
+                            current_line = chunk
+                        start = end
+            else:
+                candidate = current_line + ' ' + word
+                if len(candidate) <= width:
+                    current_line = candidate
+                else:
+                    # Flush current line
+                    wrapped_lines.append(current_line)
+                    # Start new line with word, splitting if needed
+                    if len(word) <= width:
+                        current_line = word
+                    else:
+                        start = 0
+                        current_line = ''
+                        while start < len(word):
+                            end = min(start + width, len(word))
+                            chunk = word[start:end]
+                            if end < len(word):
+                                wrapped_lines.append(chunk)
+                            else:
+                                current_line = chunk
+                            start = end
+
+        if current_line:
+            wrapped_lines.append(current_line)
+
+        # Final safety: assert no line exceeds width
+        for ln in wrapped_lines:
+            if len(ln) > width:
+                raise AssertionError(f"Line exceeds width {width}: '{ln}' (len={len(ln)})")
+
+        wrapped_paragraphs.append('\n'.join(wrapped_lines))
+
+    return '\n\n'.join(wrapped_paragraphs)
+
+
+def validate_wrapped_text(text: str, width: int) -> bool:
+    """
+    Validate that all lines in `text` are <= `width` characters long.
+
+    Returns True if valid, False otherwise.
+    """
+    for line in text.split('\n'):
+        if len(line) > width:
+            return False
+    return True
+
+
+def paragraph_has_word_exceeding_width(text: str, width: int) -> bool:
+    """
+    Returns True if any whitespace-delimited token in `text` has length > `width`.
+
+    Normalizes internal newlines/spaces similarly to wrapping to align behavior.
+    """
+    if width <= 0:
+        return True
+    norm = text.replace('\n', ' ')
+    norm = re.sub(r' +', ' ', norm).strip()
+    if not norm:
+        return False
+    for tok in re.split(r'\s+', norm):
+        if len(tok) > width:
+            return True
+    return False
+
 def create_linebreak_dataset(
     book_ids: List[int], 
     num_sequences: int, 
@@ -287,25 +414,20 @@ def create_linebreak_dataset(
     return dataset
 
 
-def get_gemma_tokenizer(device="mps", dtype="float16"):
+def get_gemma_tokenizer(model_name: str = "google/gemma-2-27b", use_fast: bool = True):
     """
-    Get the Gemma-2-2b tokenizer via TransformerLens.
-    
+    Get the Gemma-2 tokenizer via HuggingFace Transformers without loading the full model.
+
     Args:
-        device: Device to use ("mps" for Mac M3, "cuda" for NVIDIA, "cpu" for CPU)
-        dtype: Data type ("float16" for faster/less memory, "float32" for precision)
-    
+        model_name: HuggingFace model id (default: google/gemma-2-27b)
+        use_fast: Whether to use the fast tokenizer implementation (recommended).
+
     Returns:
-        The Gemma-2-2b tokenizer from a HookedTransformer model
+        A tokenizer compatible with encode/decode and offset mappings.
     """
-    print("Loading Gemma-2-2b tokenizer via TransformerLens...")
-    print(f"  Device: {device}, dtype: {dtype}")
-    model = HookedTransformer.from_pretrained(
-        "google/gemma-2-2b",
-        device=device,
-        dtype=dtype
-    )
-    return model.tokenizer
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(model_name, use_fast=use_fast)
+    return tok
 
 
 def tokenize_dataset(
@@ -316,12 +438,12 @@ def tokenize_dataset(
     dtype: str = "float16"
 ) -> Dict[int, List[List[int]]]:
     """
-    Tokenize all sequences in the dataset using Gemma-2-2b tokenizer.
+    Tokenize all sequences in the dataset using a Gemma-2 tokenizer (default: 27b).
     
     Args:
         dataset: Dictionary mapping line_width -> list of text sequences
         tokenizer: Gemma tokenizer (if None, will load it)
-        max_length: Maximum sequence length in tokens (default: 8192 for Gemma-2-2b)
+        max_length: Maximum sequence length in tokens (default: 8192 for Gemma-2)
                    If None, no truncation is applied
         device: Device for model ("mps", "cuda", or "cpu")
         dtype: Data type ("float16" or "float32")
@@ -330,7 +452,7 @@ def tokenize_dataset(
         Dictionary mapping line_width -> list of token sequences (as lists of ints)
     """
     if tokenizer is None:
-        tokenizer = get_gemma_tokenizer(device=device, dtype=dtype)
+        tokenizer = get_gemma_tokenizer()
     
     print(f"\nTokenizing dataset (max_length={max_length if max_length else 'None'})...")
     
@@ -385,67 +507,201 @@ def generate_token_metadata(
         
     Returns:
         List of metadata dicts, one per token, with keys:
-        - char_position: Current position in line (in characters)
+        - current_char_position: Char count on the current line BEFORE this token
+        - char_position: Char count on the current line AFTER placing this token's
+                         visible chars on the current line (<= line_width)
         - line_width: The constraint k
-        - chars_remaining: Space left on current line
-        - token_length: Length of current token in characters
-        - next_token_length: Length of next token in characters
+        - chars_remaining_before: Space left on current line BEFORE placing token
+        - token_length: Length of current token span in characters (full span, may include newlines)
+        - next_token_length: Length of next token span in characters (full span)
         - line_number: Which line we're on (0-indexed)
-        - is_newline: Whether this token contains/is a newline
+        - is_newline: Whether this token's span contains a newline
+        - token_visible_length: Visible chars this token adds to the current line (0 if span is only "\n")
+        - next_visible_length: Visible chars the next token would add before its first newline
+        - would_wrap_next: 1 if char_position + next_visible_length > line_width, else 0
     """
     metadata = []
-    
-    # Decode all tokens to get their string representations
+
+    # Try to use offset mapping for robust alignment to raw text
+    offsets = None
+    try:
+        enc = tokenizer(
+            text,
+            return_offsets_mapping=True,
+            add_special_tokens=True,
+            max_length=len(tokens),
+            truncation=True,
+        )
+        # Handle batch vs single
+        if isinstance(enc["offset_mapping"], list):
+            offsets = enc["offset_mapping"]
+            input_ids = enc["input_ids"]
+        else:
+            offsets = enc["offset_mapping"][0]
+            input_ids = enc["input_ids"][0]
+        # Ensure length match
+        if len(offsets) != len(tokens):
+            offsets = None
+    except Exception:
+        offsets = None
+
+    if offsets is not None:
+        # Precompute newline helpers for text positions
+        n = len(text)
+        last_nl = [-1] * (n + 1)
+        last = -1
+        for i, ch in enumerate(text):
+            if ch == '\n':
+                last = i
+            last_nl[i + 1] = last
+        # line number as count of newlines before index
+        # We can compute on the fly via last_nl and a separate prefix count
+        nl_count = [0] * (n + 1)
+        c = 0
+        for i, ch in enumerate(text):
+            if ch == '\n':
+                c += 1
+            nl_count[i + 1] = c
+
+        for i, (tok_id, (start, end)) in enumerate(zip(tokens, offsets)):
+            # Special tokens typically have (0,0); they don't consume text
+            if start == end == 0 and (i == 0 or i == len(tokens) - 1):
+                # Keep position identical to previous token; use last state
+                # Compute current position from previous if exists
+                if i == 0:
+                    current_char_position = 0
+                    line_number = 0
+                else:
+                    prev = metadata[-1]
+                    current_char_position = prev['current_char_position']
+                    line_number = prev['line_number']
+                token_length = 0
+                next_token_length = 0
+                token_visible_length = 0
+                next_visible_length = 0
+                char_position_after_line = current_char_position
+                is_newline = False
+                chars_remaining_before = line_width - current_char_position
+                would_wrap_next = 1 if (char_position_after_line + next_visible_length > line_width) else 0
+            else:
+                # Compute from raw text slice
+                # Clamp to text bounds
+                start = max(0, min(start, n))
+                end = max(0, min(end, n))
+                substr = text[start:end]
+                # Current pos = distance from last newline before start
+                ln_index = last_nl[start]  # -1 if none
+                current_char_position = start - (ln_index + 1)
+                line_number = nl_count[start]
+                # Determine visible portion on this line
+                nl_pos = substr.find('\n')
+                if nl_pos == -1:
+                    before_first_nl_len = len(substr)
+                    is_newline = False
+                    after_last_nl_len = 0
+                else:
+                    before_first_nl_len = nl_pos
+                    is_newline = True
+                    after_last_nl_len = len(substr) - (substr.rfind('\n') + 1)
+                token_length = len(substr)
+                token_visible_length = before_first_nl_len
+                # Next token full length and visible length
+                if i + 1 < len(tokens):
+                    ns, ne = offsets[i + 1]
+                    ns = max(0, min(n, ns)); ne = max(0, min(n, ne))
+                    next_sub = text[ns:ne]
+                    next_token_length = len(next_sub)
+                    nl2 = next_sub.find('\n')
+                    next_visible_length = len(next_sub) if nl2 == -1 else nl2
+                else:
+                    next_token_length = 0
+                    next_visible_length = 0
+                # After position on current line (never exceeds width given wrapped text)
+                char_position_after_line = current_char_position + before_first_nl_len
+                # Safety clamp (should be unnecessary with correct wrapping)
+                if char_position_after_line > line_width:
+                    char_position_after_line = line_width
+                chars_remaining_before = line_width - current_char_position
+                would_wrap_next = 1 if (char_position_after_line + next_visible_length > line_width) else 0
+
+            token_metadata = {
+                'current_char_position': int(current_char_position),
+                'char_position': int(char_position_after_line),
+                'line_width': int(line_width),
+                'chars_remaining_before': int(chars_remaining_before),
+                'token_length': int(token_length),
+                'next_token_length': int(next_token_length),
+                'line_number': int(line_number),
+                'is_newline': bool(is_newline),
+                'token_visible_length': int(token_visible_length),
+                'next_visible_length': int(next_visible_length),
+                'would_wrap_next': int(would_wrap_next),
+            }
+            metadata.append(token_metadata)
+
+        return metadata
+
+    # Fallback: per-token decode heuristic (less reliable around spaces/newlines)
     token_strings = []
     for token in tokens:
-        decoded = tokenizer.decode([token])
+        try:
+            decoded = tokenizer.decode([token])
+        except Exception:
+            decoded = ''
         token_strings.append(decoded)
-    
-    # Track position as we go through tokens
-    char_position = 0  # Position in current line
+
+    char_position = 0
     line_number = 0
-    
     for i, (token, token_str) in enumerate(zip(tokens, token_strings)):
-        # Calculate token length
+        current_char_position = char_position
         token_length = len(token_str)
-        
-        # Calculate next token length
         next_token_length = len(token_strings[i + 1]) if i + 1 < len(token_strings) else 0
-        
-        # Check if this token contains a newline
         is_newline = '\n' in token_str
-        
-        # Calculate characters remaining on current line
-        chars_remaining = line_width - char_position
-        
-        # Create metadata for this token
+        if is_newline:
+            parts = token_str.split('\n')
+            before_first_nl_len = len(parts[0])
+            after_last_nl_len = len(parts[-1])
+            newline_count = len(parts) - 1
+            char_position_after_line = current_char_position + before_first_nl_len
+        else:
+            after_last_nl_len = 0
+            newline_count = 0
+            char_position_after_line = current_char_position + token_length
+        token_visible_length = before_first_nl_len
+        # Next visible length heuristic
+        if i + 1 < len(tokens):
+            next_str = token_strings[i + 1]
+            nl2 = next_str.find('\n')
+            next_visible_length = len(next_str) if nl2 == -1 else nl2
+            next_token_length = len(next_str)
+        else:
+            next_visible_length = 0
+            next_token_length = 0
+        chars_remaining_before = line_width - current_char_position
+        # Clamp to maintain invariants in heuristic mode
+        if char_position_after_line > line_width:
+            char_position_after_line = line_width
+        would_wrap_next = 1 if (char_position_after_line + next_visible_length > line_width) else 0
         token_metadata = {
-            'char_position': char_position,
-            'line_width': line_width,
-            'chars_remaining': chars_remaining,
-            'token_length': token_length,
-            'next_token_length': next_token_length,
-            'line_number': line_number,
-            'is_newline': is_newline
+            'current_char_position': int(current_char_position),
+            'char_position': int(char_position_after_line),
+            'line_width': int(line_width),
+            'chars_remaining_before': int(chars_remaining_before),
+            'token_length': int(token_length),
+            'next_token_length': int(next_token_length),
+            'line_number': int(line_number),
+            'is_newline': bool(is_newline),
+            'token_visible_length': int(token_visible_length),
+            'next_visible_length': int(next_visible_length),
+            'would_wrap_next': int(would_wrap_next),
         }
         metadata.append(token_metadata)
-        
-        # Update position for next token
         if is_newline:
-            # Reset to start of new line
-            # Handle case where token might be "\nword" - position is after newline
             parts = token_str.split('\n')
-            if len(parts) > 1:
-                # Token contains newline, position is length of text after last newline
-                char_position = len(parts[-1])
-                line_number += token_str.count('\n')
-            else:
-                char_position = 0
-                line_number += 1
+            char_position = len(parts[-1])
+            line_number += len(parts) - 1
         else:
-            # Continue on same line
-            char_position += token_length
-    
+            char_position = char_position_after_line
     return metadata
 
 
@@ -463,15 +719,15 @@ def create_metadata_dataset(
         dataset: Dictionary mapping line_width -> list of text sequences
         tokenized_dataset: Dictionary mapping line_width -> list of token sequences
         tokenizer: Gemma tokenizer (if None, will load it)
-        device: Device for model
-        dtype: Data type
+        device: Unused (kept for backward-compatibility)
+        dtype: Unused (kept for backward-compatibility)
         
     Returns:
         Dictionary mapping line_width -> list of metadata sequences
         Each metadata sequence is a list of dicts with token position info
     """
     if tokenizer is None:
-        tokenizer = get_gemma_tokenizer(device=device, dtype=dtype)
+        tokenizer = get_gemma_tokenizer()
     
     print("\nGenerating token metadata...")
     
@@ -752,8 +1008,20 @@ def save_tokenized_dataset_torch(
             
             # Convert metadata to tensors
             # Each metadata dict becomes a row of features
-            metadata_keys = ['char_position', 'line_width', 'chars_remaining', 
-                           'token_length', 'next_token_length', 'line_number', 'is_newline']
+            # Order chosen to put the mech-interp target first
+            metadata_keys = [
+                'current_char_position',
+                'char_position',  # after (within line)
+                'line_width',
+                'chars_remaining_before',
+                'token_length',
+                'next_token_length',
+                'line_number',
+                'is_newline',
+                'token_visible_length',
+                'next_visible_length',
+                'would_wrap_next'
+            ]
             
             padded_metadata = []
             for metadata_seq in metadata_sequences:
@@ -777,4 +1045,3 @@ def save_tokenized_dataset_torch(
             print(f"  width_{width}_metadata.pt: shape {metadata_tensor.shape}, {meta_size:.1f} KB")
     
     print(f"\n✓ Tokenized dataset saved as PyTorch tensors!")
-
