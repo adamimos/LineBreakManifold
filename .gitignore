@@ -1,5 +1,6 @@
 # Dataset files (generated, not version controlled)
-linebreak_data/
+linebreak_data/*
+!linebreak_data/*.txt
 
 # Python
 __pycache__/
